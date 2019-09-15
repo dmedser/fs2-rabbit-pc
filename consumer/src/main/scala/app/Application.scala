@@ -1,67 +1,63 @@
 package app
 
-import app.amqp.Consumer
 import app.config.AppConfig
 import app.config.AppConfig.BrokerConfig
 import app.util.AmqpUtil._
 import cats.effect._
+import cats.syntax.applicative._
 import cats.syntax.flatMap._
 import cats.syntax.functor._
 import dev.profunktor.fs2rabbit.config.declaration.DeclarationQueueConfig
 import dev.profunktor.fs2rabbit.interpreter.Fs2Rabbit
-import dev.profunktor.fs2rabbit.model.{AMQPConnection, ExchangeType}
+import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, ExchangeType}
 import dev.profunktor.fs2rabbit.resiliency.ResilientStream
 import io.chrisdavenport.log4cats.Logger
 import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
+import monix.eval.{Task, TaskApp}
 
-final case class Application[F[_] : Sync : Timer](
+final case class Application[F[_]](
   config: BrokerConfig,
   rabbit: Fs2Rabbit[F],
-  connection: AMQPConnection,
+  eventHandler: EventHandler[F],
   log: Logger[F]
-) {
+)(implicit F: Sync[F], timer: Timer[F], channel: AMQPChannel) {
 
-  def run: F[ExitCode] = {
-    import config._
+  def run: F[ExitCode] =
     for {
       _ <- log.info("Consumer")
       _ <- bindQueue(
-        fs2Rabbit = rabbit,
-        amqpConnection = connection,
-        exchangeName = exchange,
-        exchangeType = ExchangeType.Direct,
-        queueName = queue,
-        queueConfig = DeclarationQueueConfig.default(queue),
-        routingKey = routingKey
+        rabbit,
+        config.exchange,
+        ExchangeType.Direct,
+        config.queue,
+        DeclarationQueueConfig.default(config.queue),
+        config.routingKey
       )
-      _ <- ResilientStream.runF {
-        Consumer(rabbit, connection, queue) >>= { consumer =>
-          (for {
-            event <- consumer.consumeEvent()
-            _     <- consumer.handleEvent(event)
-          } yield ()).compile.drain
-        }
-      }
+      _ <- ResilientStream.run(eventHandler.process())
     } yield ExitCode.Success
-  }
 }
 
-object Application {
+object Application extends TaskApp {
 
-  private def mkApplication[F[_] : Sync : Timer](
+  def run(args: List[String]): Task[ExitCode] = Application.resource.use(_.run)
+
+  private def mkApplication[F[_]](
     config: BrokerConfig,
     rabbit: Fs2Rabbit[F],
-    connection: AMQPConnection,
+    eventHandler: EventHandler[F],
     log: Logger[F]
-  ): F[Application[F]] =
-    Sync[F].delay(Application(config, rabbit, connection, log))
+  )(implicit F: Sync[F], timer: Timer[F], channel: AMQPChannel): F[Application[F]] =
+    Application(config, rabbit, eventHandler, log).pure[F]
 
-  def resource[F[_] : ConcurrentEffect : Timer]: Resource[F, Application[F]] =
+  private def resource[F[_] : ConcurrentEffect : Timer]: Resource[F, Application[F]] =
     for {
-      config      <- Resource.liftF(AppConfig.load)
-      rabbit      <- Resource.liftF(Fs2Rabbit(config.fs2Rabbit))
-      connection  <- rabbit.createConnection
-      log         <- Resource.liftF(Slf4jLogger.create)
-      application <- Resource.liftF(mkApplication(config.broker, rabbit, connection, log))
+      config                          <- Resource.liftF(AppConfig.load[F])
+      rabbit                          <- Resource.liftF(Fs2Rabbit[F](config.fs2Rabbit))
+      connection                      <- rabbit.createConnection
+      implicit0(channel: AMQPChannel) <- rabbit.createChannel(connection)
+      (acker, consumer)               <- Resource.liftF(rabbit.createAckerConsumer[String](config.broker.queue))
+      eventHandler                    <- Resource.liftF(EventHandler.create[F](consumer, acker))
+      log                             <- Resource.liftF(Slf4jLogger.create[F])
+      application                     <- Resource.liftF(mkApplication[F](config.broker, rabbit, eventHandler, log))
     } yield application
 }
