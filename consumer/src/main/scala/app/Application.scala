@@ -9,8 +9,7 @@ import cats.syntax.flatMap._
 import cats.syntax.functor._
 import dev.profunktor.fs2rabbit.config.declaration.DeclarationQueueConfig
 import dev.profunktor.fs2rabbit.interpreter.Fs2Rabbit
-import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, ExchangeType}
-import dev.profunktor.fs2rabbit.resiliency.ResilientStream
+import dev.profunktor.fs2rabbit.model.{AMQPChannel, ExchangeType}
 import io.chrisdavenport.log4cats.Logger
 import io.chrisdavenport.log4cats.slf4j.Slf4jLogger
 import monix.eval.{Task, TaskApp}
@@ -33,7 +32,7 @@ final case class Application[F[_]](
         DeclarationQueueConfig.default(config.queue),
         config.routingKey
       )
-      _ <- ResilientStream.run(eventHandler.process())
+      _ <- eventHandler.process().compile.drain
     } yield ExitCode.Success
 }
 
