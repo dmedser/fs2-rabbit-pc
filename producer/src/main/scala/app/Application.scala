@@ -22,7 +22,7 @@ final case class Application[F[_] : Sync](producer: Producer[F], log: Logger[F])
     for {
       _ <- log.info("Producer")
       _ <- producer
-        .publish(Message(PersonCreate(UUID.randomUUID(), "Tony", 30), Meta(PersonCreate.`type`)))
+        .publish(PersonCreate(UUID.randomUUID(), "Tony", 30))
         .compile
         .drain
     } yield ExitCode.Success

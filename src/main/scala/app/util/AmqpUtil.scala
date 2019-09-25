@@ -3,13 +3,13 @@ package app.util
 import java.nio.charset.StandardCharsets.UTF_8
 
 import app.amqp.{DataDecoder, Message}
-import cats.Applicative
 import cats.data.Kleisli
 import cats.effect.Sync
 import cats.syntax.applicative._
 import cats.syntax.flatMap._
 import cats.syntax.functor._
 import cats.syntax.monadError._
+import cats.{Applicative, Monad}
 import dev.profunktor.fs2rabbit.config.declaration.DeclarationQueueConfig
 import dev.profunktor.fs2rabbit.effects.MessageEncoder
 import dev.profunktor.fs2rabbit.interpreter.Fs2Rabbit
@@ -21,7 +21,7 @@ import io.circe.{Encoder, Json, parser}
 
 object AmqpUtil {
 
-  def bindQueue[F[_] : Sync](
+  def bindQueue[F[_] : Monad](
     fs2Rabbit: Fs2Rabbit[F],
     exchangeName: ExchangeName,
     exchangeType: ExchangeType,
